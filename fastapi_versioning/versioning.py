@@ -3,7 +3,11 @@ from typing import Any, Callable, Dict, List, Tuple, TypeVar, cast
 
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
-from starlette.routing import BaseRoute
+from starlette.routing import BaseRoute, Mount
+
+import logging
+
+LOG = logging.getLogger(__name__)
 
 CallableT = TypeVar("CallableT", bound=Callable[..., Any])
 
@@ -15,6 +19,11 @@ def version(major: int, minor: int = 0) -> Callable[[CallableT], CallableT]:
 
     return decorator
 
+def filter_api_routes(route):
+    return isinstance(route, APIRoute)
+
+def filter_static_mounts(route):
+    return isinstance(route, Mount)
 
 def version_to_route(
     route: BaseRoute,
@@ -46,11 +55,13 @@ def VersionedFastAPI(
         list
     )
     version_routes = [
-        version_to_route(route, default_version) for route in app.routes
+        version_to_route(route, default_version) for route in filter(filter_api_routes, app.routes)
     ]
 
     for version, route in version_routes:
         version_route_mapping[version].append(route)
+
+    static_mounts = filter(filter_static_mounts, app.routes)
 
     unique_routes = {}
     versions = sorted(version_route_mapping.keys())
@@ -88,6 +99,12 @@ def VersionedFastAPI(
             version=semver,
             **args,
         )
+
+        # Add static mounts for legacy/latest
+        for mount in static_mounts:
+            api_mount = cast(Mount, mount)
+            parent_app.mount(api_mount.path, api_mount.app, api_mount.name)
+
         for route in unique_routes.values():
             versioned_app.router.routes.append(route)
         parent_app.mount(prefix, versioned_app)
